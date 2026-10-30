@@ -10,13 +10,19 @@ from .compat import open_url, get_platform_name
 
 class XuexitongAutoPilot:
     """
-    全流程一站式巡航执行器：跨平台适配 Windows / macOS / Linux
+    全流程一站式巡航执行器：
+    1. 自动检测与交互登录
+    2. 自动检查并交互引导配置 DeepSeek API Key（用于自动写作业答题）
+    3. 自动扫描课程与章节
+    4. 原速视频心跳守护
+    5. 自动题目抓取 + DeepSeek 语义推理解答与提交
     """
     def __init__(self, course_id=None, clazz_id=None, api_key=None, non_interactive=False):
         self.sm = XuexitongSession()
         self.auth = XuexitongAuth(self.sm)
         self.client = XuexitongClient(self.sm)
-        self.solver = AISolver(api_key=api_key)
+        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+        self.solver = AISolver(api_key=self.api_key)
         self.course_id = course_id
         self.clazz_id = clazz_id
         self.non_interactive = non_interactive
@@ -74,10 +80,50 @@ class XuexitongAutoPilot:
         print("\n❌ 等待超时，未完成登录。")
         return False
 
+    def ensure_api_key_interactive(self):
+        """登录成功后，主动检测并交互询问是否配置 DeepSeek Key 用于自动做题"""
+        # 1. 尝试从已保存的 session 中读取历史保存过的 api_key
+        saved_key = self.sm.user_info.get("deepseek_api_key")
+        if not self.api_key and saved_key:
+            self.api_key = saved_key
+            self.solver = AISolver(api_key=self.api_key)
+
+        if self.api_key:
+            print(f"🤖 [AI 答题配置] 已检测到 DeepSeek Key: {self.api_key[:6]}...{self.api_key[-4:]} (自动做题已启用)")
+            return
+
+        if not sys.stdin.isatty() or self.non_interactive:
+            return
+
+        print("\n" + "-" * 50)
+        print("💡 [提示] 自动写作业/测验需要配置 DeepSeek API Key。")
+        print("   如果配置，遇到题目会调用 AI 自动做题并提交；")
+        print("   如果不配置，将只刷视频，跳过测验题。")
+        print("-" * 50)
+
+        try:
+            user_input = input("👉 请输入您的 DeepSeek API Key (直接回车跳过答题): ").strip()
+            if user_input:
+                self.api_key = user_input
+                self.solver = AISolver(api_key=self.api_key)
+                # 持久化保存到 session 中，下次无需再输
+                self.sm.user_info["deepseek_api_key"] = user_input
+                self.sm.save()
+                print("✅ Key 已保存，自动做题功能已激活！\n")
+            else:
+                print("ℹ️ 已跳过配置，本次将仅自动刷视频，不自动提交作业测验。\n")
+        except Exception:
+            pass
+
     def run(self):
+        # 1. 检查并引导登录
         if not self.ensure_login_interactive():
             return
 
+        # 2. 登录成功后，主动检查与提醒填写 DeepSeek Key
+        self.ensure_api_key_interactive()
+
+        # 3. 扫描课程
         print("\n[1/3] 正在扫描您加入的所有课程...")
         courses = self.client.get_course_list()
         if not courses:
@@ -88,6 +134,7 @@ class XuexitongAutoPilot:
         for idx, c in enumerate(courses):
             print(f"  [{idx + 1}] 《{c['title']}》 (课程ID: {c['course_id']}, 班级: {c['clazz_id']})")
 
+        # 4. 选课逻辑
         selected_courses = []
         if self.course_id and self.clazz_id:
             selected_courses = [{"course_id": self.course_id, "clazz_id": self.clazz_id, "title": "指定课程"}]
@@ -109,6 +156,7 @@ class XuexitongAutoPilot:
             else:
                 selected_courses = courses
 
+        # 5. 逐门推进
         for c_idx, course in enumerate(selected_courses):
             c_name = course.get("title", f"课程_{course['course_id']}")
             print(f"\n" + "=" * 50)
@@ -147,7 +195,7 @@ class XuexitongAutoPilot:
                     except Exception as e:
                         print(f"    ⚠️ AI 解答提示: {e}")
                 else:
-                    print("    ℹ️ 未配置 DEEPSEEK_API_KEY，已跳过做题（配置后可自动答题）")
+                    print("    ℹ️ 未配置 DEEPSEEK_API_KEY，已跳过做题")
 
                 time.sleep(1)
 
