@@ -7,7 +7,7 @@ DEFAULT_SESSION_FILE = Path.home() / ".xuexitong_session.json"
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 }
 
@@ -27,7 +27,7 @@ class XuexitongSession:
                 self.user_info = data.get("user_info", {})
                 for k, v in cookies.items():
                     self.session.cookies.set(k, v, domain=".chaoxing.com")
-            except Exception as e:
+            except Exception:
                 pass
 
     def save(self):
@@ -39,21 +39,18 @@ class XuexitongSession:
         self.session_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
     def is_logged_in(self):
-        # 验证 cookie 是否有效
+        # 1. 如果本地连最基础的 UID / _uid / vc3 都没有，直接判定未登录
+        if not (self.session.cookies.get("UID") or self.session.cookies.get("_uid")):
+            return False
+
+        # 2. 通过验证个人空间或课程中心判定登录态有效性
         try:
-            resp = self.session.get("https://mooc1-1.chaoxing.com/api/work/get-user-info", timeout=5)
-            if resp.ok and resp.text.strip():
-                try:
-                    res_json = resp.json()
-                    if res_json.get("status") is True or res_json.get("result") == 1:
-                        self.user_info = res_json.get("data", {})
-                        self.save()
-                        return True
-                except Exception:
-                    pass
-            # 备用验证端点
+            resp = self.session.get("https://mooc1-2.chaoxing.com/visit/courses/study?isAjax=true", allow_redirects=False, timeout=8)
+            if resp.status_code == 200 and ("courseItem" in resp.text or "courseName" in resp.text or "ulDiv" in resp.text):
+                return True
+            
             resp2 = self.session.get("https://i.chaoxing.com/base", allow_redirects=False, timeout=5)
-            if resp2.status_code == 200 and "passport" not in resp2.headers.get("Location", ""):
+            if resp2.status_code == 200 or (resp2.status_code == 302 and "passport" not in resp2.headers.get("Location", "")):
                 return True
         except Exception:
             pass

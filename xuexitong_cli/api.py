@@ -20,27 +20,36 @@ class XuexitongClient:
             return courses
 
         html = resp.text
-        # 正则提取 courseId, clazzid, title
-        pattern = re.compile(r'courseId=(\d+)[^"\']*?clazzid=(\d+)[^>]*?>\s*<h3[^>]*?title="([^"]+)"', re.S)
-        matches = pattern.findall(html)
-        if matches:
-            for course_id, clazz_id, title in matches:
+        # 解析标准 li.courseItem 节点
+        lis = re.findall(r'<li[^>]*?class="[^"]*?courseItem[^"]*?".*?</li>', html, re.S)
+        for li in lis:
+            cid_match = re.search(r'name="courseId"\s+value="(\d+)"', li)
+            clazz_match = re.search(r'name="classId"\s+value="(\d+)"', li)
+            
+            # 课程名称匹配规则
+            name_match = (
+                re.search(r'class="courseName"[^>]*?title="([^"]+)"', li) or
+                re.search(r'class="courseName"[^>]*?>([^<]+)<', li) or
+                re.search(r'<h3[^>]*?title="([^"]+)"', li) or
+                re.search(r'title="([^"]+)"', li)
+            )
+
+            if cid_match and clazz_match:
+                title = name_match.group(1).strip() if name_match else f"课程_{cid_match.group(1)}"
+                if title in ["移动到", "退课"]:
+                    # 备用从 a 标签提取
+                    a_title = re.search(r'<a[^>]*?title="([^"]+)"[^>]*?>', li)
+                    if a_title and a_title.group(1) not in ["移动到", "退课"]:
+                        title = a_title.group(1).strip()
+                    else:
+                        title = f"课程_{cid_match.group(1)}"
+
                 courses.append({
-                    "course_id": course_id,
-                    "clazz_id": clazz_id,
-                    "title": title.strip()
+                    "course_id": cid_match.group(1),
+                    "clazz_id": clazz_match.group(1),
+                    "title": title
                 })
-        else:
-            links = re.findall(r'href="([^"]*courseId=(\d+)[^"]*clazzid=(\d+)[^"]*)"', html)
-            seen = set()
-            for href, course_id, clazz_id in links:
-                if (course_id, clazz_id) not in seen:
-                    seen.add((course_id, clazz_id))
-                    courses.append({
-                        "course_id": course_id,
-                        "clazz_id": clazz_id,
-                        "title": f"课程_{course_id}"
-                    })
+
         return courses
 
     def get_course_chapters(self, course_id: str, clazz_id: str, cpi: str = ""):

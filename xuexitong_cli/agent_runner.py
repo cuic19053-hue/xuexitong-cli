@@ -22,7 +22,7 @@ class XuexitongAutoPilot:
         self.non_interactive = non_interactive
 
     def ensure_login_interactive(self):
-        """如果未登录，直接在命令行启动无缝扫码登录流，并自动调起系统默认浏览器"""
+        """如果未登录，直接在命令行启动无缝扫码登录流，并自动调起系统图片查看器展示二维码"""
         if self.sm.is_logged_in():
             print("✅ 检测到已登录凭据，直接进入系统。")
             return True
@@ -36,20 +36,20 @@ class XuexitongAutoPilot:
 
         uuid = qr_info["uuid"]
         enc = qr_info["enc"]
-        qr_url = qr_info["qr_img_url"]
+        local_qr = qr_info.get("local_qr_path")
         
         print("\n" + "=" * 50)
-        print("请在手机或浏览器中扫码登录：")
-        print(f"👉 二维码图片: {qr_url}")
-        print("=" * 50 + "\n")
-        
-        # 尝试调用系统浏览器自动弹出二维码
-        if sys.stdin.isatty() and not self.non_interactive:
+        print("请使用手机学习通 App 扫码登录：")
+        if local_qr and os.path.exists(local_qr):
+            print(f"📸 本地二维码图片已生成: {local_qr}")
             try:
-                open_url(qr_url)
-                print("💡 [提示] 已尝试通过系统默认浏览器弹出二维码图片...")
+                open_url(local_qr)
+                print("💡 [提示] 已自动为您打开本地二维码图片窗口！")
             except Exception:
                 pass
+        else:
+            print(f"👉 二维码图片链接: {qr_info['qr_img_url']}")
+        print("=" * 50 + "\n")
 
         print("正在等待手机学习通扫码确认...")
 
