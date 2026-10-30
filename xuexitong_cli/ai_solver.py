@@ -4,32 +4,23 @@ import requests
 
 class AISolver:
     def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
-        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        self.base_url = (base_url or os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/chat/completions").rstrip('/')
-        if not self.base_url.endswith("/chat/completions"):
-            self.base_url += "/chat/completions"
-        self.model = model or os.environ.get("DEEPSEEK_MODEL") or "deepseek-flash"
+        # 严格过滤 Key，剥离可能由于终端粘贴误带入的中文全角字符、不可见零宽字符与首尾空格
+        raw_key = api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+        self.api_key = raw_key.encode('ascii', 'ignore').decode('ascii').strip()
+        
+        raw_url = (base_url or os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/chat/completions").rstrip('/')
+        if not raw_url.endswith("/chat/completions"):
+            raw_url += "/chat/completions"
+        self.base_url = raw_url
+        self.model = model or os.environ.get("DEEPSEEK_MODEL") or "deepseek-chat"
 
     def solve_quiz(self, questions: list) -> list:
         """
         输入题目列表，调用 LLM 进行批处理推理答题。
-        questions 格式：
-        [
-            {
-                "id": 1,
-                "type": "单选题",
-                "question": "马克思主义的根本特征是...",
-                "options": [{"letter": "A", "text": "..."}, {"letter": "B", "text": "..."}]
-            }
-        ]
-        输出格式：
-        [
-            {"id": 1, "letters": ["A"]},
-            {"id": 2, "letters": ["B", "D"]}
-        ]
+        自动处理 UTF-8 编码，彻底规避 requests 底层 http.client 的 latin-1 字符异常。
         """
         if not self.api_key:
-            raise ValueError("未配置 API Key，请设置环境变量 DEEPSEEK_API_KEY 或在参数中指定")
+            raise ValueError("未配置有效 API Key，请设置环境变量 DEEPSEEK_API_KEY 或在参数中指定")
 
         prompt = (
             "按题意回答全部题目。注意：题干或选项可能经过网页防复制处理，出现个别汉字被替换或乱码。"
@@ -38,10 +29,12 @@ class AISolver:
             '严格输出标准 JSON 格式：{"answers":[{"id":1,"letters":["A"]}]}，禁止输出多余解释或 Markdown 标签。'
         )
 
+        # 确保 headers 中的所有键值均为纯正 ASCII 编码，防止中文标点污染 Header
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {self.api_key.strip()}"
         }
+        
         body = {
             "model": self.model,
             "stream": False,
@@ -52,7 +45,10 @@ class AISolver:
             ]
         }
 
-        resp = requests.post(self.base_url, headers=headers, json=body, timeout=60)
+        # 显式使用 UTF-8 字节流发送，彻底杜绝 latin-1 编码报错
+        payload_bytes = json.dumps(body, ensure_ascii=False).encode('utf-8')
+
+        resp = requests.post(self.base_url, headers=headers, data=payload_bytes, timeout=60)
         if not resp.ok:
             raise RuntimeError(f"大模型接口请求失败: HTTP {resp.status_code} - {resp.text}")
 
