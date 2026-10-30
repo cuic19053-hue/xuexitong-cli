@@ -20,13 +20,11 @@ class XuexitongClient:
             return courses
 
         html = resp.text
-        # 解析标准 li.courseItem 节点
         lis = re.findall(r'<li[^>]*?class="[^"]*?courseItem[^"]*?".*?</li>', html, re.S)
         for li in lis:
             cid_match = re.search(r'name="courseId"\s+value="(\d+)"', li)
             clazz_match = re.search(r'name="classId"\s+value="(\d+)"', li)
             
-            # 课程名称匹配规则
             name_match = (
                 re.search(r'class="courseName"[^>]*?title="([^"]+)"', li) or
                 re.search(r'class="courseName"[^>]*?>([^<]+)<', li) or
@@ -37,7 +35,6 @@ class XuexitongClient:
             if cid_match and clazz_match:
                 title = name_match.group(1).strip() if name_match else f"课程_{cid_match.group(1)}"
                 if title in ["移动到", "退课"]:
-                    # 备用从 a 标签提取
                     a_title = re.search(r'<a[^>]*?title="([^"]+)"[^>]*?>', li)
                     if a_title and a_title.group(1) not in ["移动到", "退课"]:
                         title = a_title.group(1).strip()
@@ -54,22 +51,53 @@ class XuexitongClient:
 
     def get_course_chapters(self, course_id: str, clazz_id: str, cpi: str = ""):
         """
-        获取课程章节目录树及任务点
+        全量解析课程章节目录树：
+        适配超星最新 mooc-ans 架构与传统 studentstudyAjax 架构
         """
-        url = f"https://mooc1-1.chaoxing.com/mycourse/studentstudyAjax?courseId={course_id}&clazzid={clazz_id}&cpi={cpi}"
-        resp = self.session.get(url, timeout=10)
         chapters = []
-        if not resp.ok:
-            return chapters
 
-        html = resp.text
-        node_pattern = re.compile(r'href="javascript:void\(0\);"[^>]*?onclick="[^"]*?getTeacherAjax\(\'(\d+)\'[^"]*?\)"[^>]*?title="([^"]+)"', re.S)
-        matches = node_pattern.findall(html)
-        for chapter_id, title in matches:
-            chapters.append({
-                "chapter_id": chapter_id,
-                "title": title.strip()
-            })
+        # 方式 1：通过 stucoursemiddle 获取学生端真实课程门户并提取小节（新版超星主干架构）
+        middle_url = f"https://mooc1-2.chaoxing.com/visit/stucoursemiddle?courseid={course_id}&clazzid={clazz_id}&vc=1"
+        try:
+            resp_mid = self.session.get(middle_url, timeout=12)
+            if resp_mid.ok:
+                html = resp_mid.text
+                # 匹配章节小节节点：href="/mooc-ans/mycourse/studentstudy?chapterId=...&courseId=..."
+                pattern = re.compile(
+                    r'href=[\'"]([^\'"]*?chapterId=(\d+)[^\'"]*?)[\'"].*?'
+                    r'<span class="chapterNumber">([^<]*)</span>.*?'
+                    r'<span class="articlename"[^>]*?title="([^"]+)"',
+                    re.S
+                )
+                matches = pattern.findall(html)
+                for study_url, chapter_id, num, name in matches:
+                    title_full = f"{num.strip()} {name.strip()}".strip()
+                    chapters.append({
+                        "chapter_id": chapter_id,
+                        "title": title_full,
+                        "study_url": study_url
+                    })
+        except Exception:
+            pass
+
+        # 方式 2：如果方式 1 为空，尝试旧版 studentstudyAjax 解析
+        if not chapters:
+            ajax_url = f"https://mooc1-1.chaoxing.com/mycourse/studentstudyAjax?courseId={course_id}&clazzid={clazz_id}&cpi={cpi}"
+            try:
+                resp_ajax = self.session.get(ajax_url, timeout=10)
+                if resp_ajax.ok and len(resp_ajax.text) > 20:
+                    html_ajax = resp_ajax.text
+                    node_pattern = re.compile(r'href="javascript:void\(0\);"[^>]*?onclick="[^"]*?getTeacherAjax\(\'(\d+)\'[^"]*?\)"[^>]*?title="([^"]+)"', re.S)
+                    matches_ajax = node_pattern.findall(html_ajax)
+                    for chapter_id, title in matches_ajax:
+                        chapters.append({
+                            "chapter_id": chapter_id,
+                            "title": title.strip(),
+                            "study_url": ""
+                        })
+            except Exception:
+                pass
+
         return chapters
 
     def report_video_progress(self, clazz_id: str, jobid: str, object_id: str, duration: float, playing_time: float, clip_time: str = "0", is_drag: int = 0):
