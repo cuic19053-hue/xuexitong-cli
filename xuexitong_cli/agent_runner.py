@@ -6,15 +6,11 @@ from .session import XuexitongSession
 from .auth import XuexitongAuth
 from .api import XuexitongClient
 from .ai_solver import AISolver
+from .compat import open_url, get_platform_name
 
 class XuexitongAutoPilot:
     """
-    全流程一站式巡航执行器：
-    1. 自动检查登录（未登录直接在终端启动扫码交互）
-    2. 自动拉取全部在修课程，支持交互式选择或自动全刷
-    3. 自动抓取课程各章节的所有任务点（视频 + 章节测验）
-    4. 原速心跳完成视频任务
-    5. 识别测验题目，调用 DeepSeek 推理解题并自动提交
+    全流程一站式巡航执行器：跨平台适配 Windows / macOS / Linux
     """
     def __init__(self, course_id=None, clazz_id=None, api_key=None, non_interactive=False):
         self.sm = XuexitongSession()
@@ -26,12 +22,12 @@ class XuexitongAutoPilot:
         self.non_interactive = non_interactive
 
     def ensure_login_interactive(self):
-        """如果未登录，直接在命令行启动无缝扫码登录流"""
+        """如果未登录，直接在命令行启动无缝扫码登录流，并自动调起系统默认浏览器"""
         if self.sm.is_logged_in():
             print("✅ 检测到已登录凭据，直接进入系统。")
             return True
 
-        print("⚠️ 未检测到有效登录态，正在为你生成终端扫码凭据...")
+        print(f"⚠️ 未检测到有效登录态 [{get_platform_name()}]，正在为你生成终端扫码凭据...")
         try:
             qr_info = self.auth.get_login_qrcode()
         except Exception as e:
@@ -40,10 +36,21 @@ class XuexitongAutoPilot:
 
         uuid = qr_info["uuid"]
         enc = qr_info["enc"]
+        qr_url = qr_info["qr_img_url"]
+        
         print("\n" + "=" * 50)
-        print("请在手机浏览器或电脑浏览器打开以下二维码扫码：")
-        print(f"👉 {qr_info['qr_img_url']}")
+        print("请在手机或浏览器中扫码登录：")
+        print(f"👉 二维码图片: {qr_url}")
         print("=" * 50 + "\n")
+        
+        # 尝试调用系统浏览器自动弹出二维码
+        if sys.stdin.isatty() and not self.non_interactive:
+            try:
+                open_url(qr_url)
+                print("💡 [提示] 已尝试通过系统默认浏览器弹出二维码图片...")
+            except Exception:
+                pass
+
         print("正在等待手机学习通扫码确认...")
 
         if self.non_interactive:
@@ -68,7 +75,6 @@ class XuexitongAutoPilot:
         return False
 
     def run(self):
-        # 1. 登录检查与自动扫码唤起
         if not self.ensure_login_interactive():
             return
 
@@ -82,7 +88,6 @@ class XuexitongAutoPilot:
         for idx, c in enumerate(courses):
             print(f"  [{idx + 1}] 《{c['title']}》 (课程ID: {c['course_id']}, 班级: {c['clazz_id']})")
 
-        # 2. 选课逻辑
         selected_courses = []
         if self.course_id and self.clazz_id:
             selected_courses = [{"course_id": self.course_id, "clazz_id": self.clazz_id, "title": "指定课程"}]
@@ -102,10 +107,8 @@ class XuexitongAutoPilot:
                 except Exception:
                     selected_courses = courses
             else:
-                # 非 tty / 脚本环境直接默认全选
                 selected_courses = courses
 
-        # 3. 逐门课程推进
         for c_idx, course in enumerate(selected_courses):
             c_name = course.get("title", f"课程_{course['course_id']}")
             print(f"\n" + "=" * 50)
@@ -121,11 +124,9 @@ class XuexitongAutoPilot:
             for ch_idx, ch in enumerate(chapters):
                 print(f"\n  [{ch_idx + 1}/{len(chapters)}] 正在处理节点: 【{ch['title']}】")
                 
-                # --- (A) 视频任务自动上报 ---
                 print("    ▶ 检查视频任务点...")
                 print("    ✅ 视频心跳已同步至服务器 (原速守护通过)")
 
-                # --- (B) 章节测验与作业自动做题 ---
                 print("    📝 检查章节测验与作业...")
                 if self.solver.api_key:
                     sample_questions = [
