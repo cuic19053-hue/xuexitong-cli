@@ -42,7 +42,6 @@ class XuexitongAutoPilot:
         print(f"📸 二维码已存至桌面: {local_qr}")
         print("=" * 55 + "\n")
 
-        # 强力自动调起 macOS 窗口（双管齐下：HTML 网页 + 系统预览图片）
         if sys.stdin.isatty() and not self.non_interactive:
             try:
                 if html_path and os.path.exists(html_path):
@@ -67,7 +66,6 @@ class XuexitongAutoPilot:
 
             if status_info["status"] == "success":
                 print("\n🎉 登录成功！凭据已自动保存。")
-                # 登录成功后清理桌面临时二维码
                 try:
                     if local_qr and os.path.exists(local_qr): os.remove(local_qr)
                     if html_path and os.path.exists(html_path): os.remove(html_path)
@@ -83,32 +81,49 @@ class XuexitongAutoPilot:
         return False
 
     def ensure_api_key_interactive(self):
+        """
+        显式提示并确认 DeepSeek Key：
+        无论之前是否有环境变量，都明确在控制台显示当前状态，并允许用户随时更换或确认
+        """
         saved_key = self.sm.user_info.get("deepseek_api_key")
-        if not self.api_key and saved_key:
-            self.api_key = saved_key
-            self.solver = AISolver(api_key=self.api_key)
+        current_key = self.api_key or saved_key
 
-        if self.api_key:
-            print(f"🤖 [AI 答题配置] 已检测到 DeepSeek Key: {self.api_key[:6]}...{self.api_key[-4:]} (自动做题已启用)")
-            return
+        print("\n" + "-" * 55)
+        if current_key:
+            masked = current_key[:6] + "..." + current_key[-4:] if len(current_key) > 10 else "***"
+            print(f"🤖 [AI 做题配置] 当前已就绪 DeepSeek API Key: {masked}")
+            print("   直接敲【回车】保持当前 Key 并启用自动做题；")
+            print("   输入【new_key】可替换为新 Key；输入【clear】可关闭做题。")
+        else:
+            print("💡 [AI 做题配置] 当前未配置 DeepSeek API Key。")
+            print("   输入您的 DeepSeek Key 可启用自动解答章节测验与作业；")
+            print("   直接敲【回车】跳过答题（本次仅自动刷视频）。")
+        print("-" * 55)
 
         if not sys.stdin.isatty() or self.non_interactive:
             return
 
-        print("\n" + "-" * 50)
-        print("💡 [提示] 自动写作业/测验需要配置 DeepSeek API Key。")
-        print("   如果配置，遇到题目会调用 AI 自动做题并提交；")
-        print("   如果不配置，将只刷视频，跳过测验题。")
-        print("-" * 50)
-
         try:
-            user_input = input("👉 请输入您的 DeepSeek API Key (直接回车跳过答题): ").strip()
-            if user_input:
+            prompt_text = "👉 请确认或输入 DeepSeek API Key (回车使用默认): " if current_key else "👉 请输入您的 DeepSeek API Key (回车跳过答题): "
+            user_input = input(prompt_text).strip()
+            
+            if user_input.lower() == "clear":
+                self.api_key = None
+                self.solver = AISolver(api_key=None)
+                if "deepseek_api_key" in self.sm.user_info:
+                    del self.sm.user_info["deepseek_api_key"]
+                    self.sm.save()
+                print("ℹ️ 已清除 Key，本次将仅自动刷视频，不自动提交作业测验。\n")
+            elif user_input:
                 self.api_key = user_input
                 self.solver = AISolver(api_key=self.api_key)
                 self.sm.user_info["deepseek_api_key"] = user_input
                 self.sm.save()
-                print("✅ Key 已保存，自动做题功能已激活！\n")
+                print("✅ Key 已更新并保存，自动做题功能已激活！\n")
+            elif current_key:
+                self.api_key = current_key
+                self.solver = AISolver(api_key=self.api_key)
+                print("✅ 已确认使用当前 DeepSeek Key，自动做题已激活！\n")
             else:
                 print("ℹ️ 已跳过配置，本次将仅自动刷视频，不自动提交作业测验。\n")
         except Exception:
@@ -118,6 +133,7 @@ class XuexitongAutoPilot:
         if not self.ensure_login_interactive():
             return
 
+        # 无论何种情况，都显式提示并确认 Key
         self.ensure_api_key_interactive()
 
         print("\n[1/3] 正在扫描您加入的所有课程...")
