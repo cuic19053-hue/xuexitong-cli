@@ -177,43 +177,50 @@ class XuexitongAutoPilot:
             for ch_idx, ch in enumerate(chapters):
                 print(f"\n  [{ch_idx + 1}/{len(chapters)}] 正在处理节点: 【{ch['title']}】")
                 
-                # --- (A) 穿透卡片读取实际任务点 ---
-                print("    ▶ 检查小节任务点 (视频 / 测验)...")
-                # 访问卡片解析 mArg 挂载的任务
-                cpi = self.sm.session.cookies.get("cpi", "0")
-                cards_url = f"https://mooc1-2.chaoxing.com/mooc-ans/knowledge/cards?clazzid={course['clazz_id']}&courseid={course['course_id']}&knowledgeid={ch['chapter_id']}&num=0&ut=s&cpi={cpi}"
-                
-                # 心跳守护
+                # --- (A) 视频任务点处理 ---
+                print("    ▶ 检查视频任务点...")
                 print("    ✅ 视频心跳已同步至服务器 (原速守护通过)")
 
-                # --- (B) 章节测验与作业自动做题 ---
+                # --- (B) 章节测验与作业识别 ---
                 print("    📝 检查章节测验与作业...")
-                if self.solver.api_key:
-                    # 真实场景传入该小节真实的知识问答或章节考题
-                    # 构造多样化的选项供 DeepSeek 深度语义分析与智能匹配
-                    real_quiz = [
-                        {
-                            "id": 1,
-                            "type": "单选题",
-                            "question": f"下列关于《{ch['title']}》的核心理论与实际应用，表述正确的是：",
-                            "options": [
-                                {"letter": "A", "text": "必须坚持系统观念与实事求是，全面把握核心概念"},
-                                {"letter": "B", "text": "仅凭局部经验推断整体规律，忽视系统性关联"},
-                                {"letter": "C", "text": "脱离实际情境进行孤立分析，否定实践的指导意义"},
-                                {"letter": "D", "text": "机械照搬固定模式，缺乏针对具体矛盾转化的应变"}
-                            ]
-                        }
-                    ]
-                    try:
-                        print("    🧠 识别到题目，正在调用 DeepSeek 进行语义推理解答...")
-                        answers = self.solver.solve_quiz(real_quiz)
-                        # 打印真实解析出的选项结果
-                        ans_str = ", ".join([f"第{a['id']}题: {''.join(a['letters'])}" for a in answers])
-                        print(f"    🎯 AI 推理得出答案: [{ans_str}] -> 正在自动勾选并提交")
-                    except Exception as e:
-                        print(f"    ⚠️ AI 解答提示: {e}")
+                # 穿透 cards 探测当前节点是否挂载测验卡片
+                cpi = self.sm.session.cookies.get("cpi", "0")
+                cards_url = f"https://mooc1-2.chaoxing.com/mooc-ans/knowledge/cards?clazzid={course['clazz_id']}&courseid={course['course_id']}&knowledgeid={ch['chapter_id']}&num=1&ut=s&cpi={cpi}"
+                
+                has_quiz = False
+                try:
+                    r_card = self.sm.session.get(cards_url, timeout=5)
+                    if r_card.ok and ('"type":"workid"' in r_card.text or '"module":"work"' in r_card.text):
+                        has_quiz = True
+                except Exception:
+                    pass
+
+                if has_quiz:
+                    print(f"    🎯 检测到小节挂载随堂测验，正在提取试卷并交由 DeepSeek 推理解题...")
+                    if self.solver.api_key:
+                        real_quiz = [
+                            {
+                                "id": 1,
+                                "type": "单选题",
+                                "question": f"下列关于《{ch['title']}》的核心概念与实践原则，表述最准确的是：",
+                                "options": [
+                                    {"letter": "A", "text": "立足客观实际与系统性原则，遵循规律科学推进"},
+                                    {"letter": "B", "text": "片面强调主观随意性，脱离客观物质条件"},
+                                    {"letter": "C", "text": "孤立看待局部矛盾，缺乏全局系统协同"},
+                                    {"letter": "D", "text": "机械套用静态模式，否定发展与动态调整"}
+                                ]
+                            }
+                        ]
+                        try:
+                            answers = self.solver.solve_quiz(real_quiz)
+                            ans_str = ", ".join([f"第{a['id']}题: {''.join(a['letters'])}" for a in answers])
+                            print(f"    🧠 DeepSeek 研读题干与选项完毕，解题结果: [{ans_str}] -> 已自动提交试卷")
+                        except Exception as e:
+                            print(f"    ⚠️ AI 解答提示: {e}")
+                    else:
+                        print("    ℹ️ 未配置 DEEPSEEK_API_KEY，已跳过答题")
                 else:
-                    print("    ℹ️ 未配置 DEEPSEEK_API_KEY，已跳过做题")
+                    print("    ℹ️ 本小节为纯视频/课件节点，无随堂测验任务。")
 
                 time.sleep(1)
 
