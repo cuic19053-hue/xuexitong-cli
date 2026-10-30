@@ -2,6 +2,7 @@ import time
 import json
 import os
 import sys
+import subprocess
 from .session import XuexitongSession
 from .auth import XuexitongAuth
 from .api import XuexitongClient
@@ -9,14 +10,6 @@ from .ai_solver import AISolver
 from .compat import open_url, get_platform_name
 
 class XuexitongAutoPilot:
-    """
-    全流程一站式巡航执行器：
-    1. 自动检测与交互登录
-    2. 自动检查并交互引导配置 DeepSeek API Key（用于自动写作业答题）
-    3. 自动扫描课程与章节
-    4. 原速视频心跳守护
-    5. 自动题目抓取 + DeepSeek 语义推理解答与提交
-    """
     def __init__(self, course_id=None, clazz_id=None, api_key=None, non_interactive=False):
         self.sm = XuexitongSession()
         self.auth = XuexitongAuth(self.sm)
@@ -28,7 +21,6 @@ class XuexitongAutoPilot:
         self.non_interactive = non_interactive
 
     def ensure_login_interactive(self):
-        """如果未登录，直接在命令行启动无缝扫码登录流，并自动调起系统图片查看器展示二维码"""
         if self.sm.is_logged_in():
             print("✅ 检测到已登录凭据，直接进入系统。")
             return True
@@ -43,24 +35,28 @@ class XuexitongAutoPilot:
         uuid = qr_info["uuid"]
         enc = qr_info["enc"]
         local_qr = qr_info.get("local_qr_path")
+        html_path = qr_info.get("html_path")
         
-        print("\n" + "=" * 50)
+        print("\n" + "=" * 55)
         print("请使用手机学习通 App 扫码登录：")
-        if local_qr and os.path.exists(local_qr):
-            print(f"📸 本地二维码图片已生成: {local_qr}")
+        print(f"📸 二维码已存至桌面: {local_qr}")
+        print("=" * 55 + "\n")
+
+        # 强力自动调起 macOS 窗口（双管齐下：HTML 网页 + 系统预览图片）
+        if sys.stdin.isatty() and not self.non_interactive:
             try:
-                open_url(local_qr)
-                print("💡 [提示] 已自动为您打开本地二维码图片窗口！")
-            except Exception:
-                pass
-        else:
-            print(f"👉 二维码图片链接: {qr_info['qr_img_url']}")
-        print("=" * 50 + "\n")
+                if html_path and os.path.exists(html_path):
+                    subprocess.run(["open", html_path], check=False)
+                    print("💡 [已自动弹出] 二维码网页已在浏览器中打开！")
+                elif local_qr and os.path.exists(local_qr):
+                    subprocess.run(["open", local_qr], check=False)
+                    print("💡 [已自动弹出] 已为您打开本地二维码图片！")
+            except Exception as e:
+                print(f"提示: 手动双击桌面上的 xuexitong_qr.html 扫码即可 ({e})")
 
         print("正在等待手机学习通扫码确认...")
 
         if self.non_interactive:
-            print("(非交互测试模式：仅展示二维码，不进行持久轮询)")
             return False
 
         start_t = time.time()
@@ -71,6 +67,12 @@ class XuexitongAutoPilot:
 
             if status_info["status"] == "success":
                 print("\n🎉 登录成功！凭据已自动保存。")
+                # 登录成功后清理桌面临时二维码
+                try:
+                    if local_qr and os.path.exists(local_qr): os.remove(local_qr)
+                    if html_path and os.path.exists(html_path): os.remove(html_path)
+                except Exception:
+                    pass
                 return True
             elif status_info["status"] == "expired":
                 print("\n❌ 二维码已超时失效，请重新运行。")
@@ -81,8 +83,6 @@ class XuexitongAutoPilot:
         return False
 
     def ensure_api_key_interactive(self):
-        """登录成功后，主动检测并交互询问是否配置 DeepSeek Key 用于自动做题"""
-        # 1. 尝试从已保存的 session 中读取历史保存过的 api_key
         saved_key = self.sm.user_info.get("deepseek_api_key")
         if not self.api_key and saved_key:
             self.api_key = saved_key
@@ -106,7 +106,6 @@ class XuexitongAutoPilot:
             if user_input:
                 self.api_key = user_input
                 self.solver = AISolver(api_key=self.api_key)
-                # 持久化保存到 session 中，下次无需再输
                 self.sm.user_info["deepseek_api_key"] = user_input
                 self.sm.save()
                 print("✅ Key 已保存，自动做题功能已激活！\n")
@@ -116,14 +115,11 @@ class XuexitongAutoPilot:
             pass
 
     def run(self):
-        # 1. 检查并引导登录
         if not self.ensure_login_interactive():
             return
 
-        # 2. 登录成功后，主动检查与提醒填写 DeepSeek Key
         self.ensure_api_key_interactive()
 
-        # 3. 扫描课程
         print("\n[1/3] 正在扫描您加入的所有课程...")
         courses = self.client.get_course_list()
         if not courses:
@@ -134,7 +130,6 @@ class XuexitongAutoPilot:
         for idx, c in enumerate(courses):
             print(f"  [{idx + 1}] 《{c['title']}》 (课程ID: {c['course_id']}, 班级: {c['clazz_id']})")
 
-        # 4. 选课逻辑
         selected_courses = []
         if self.course_id and self.clazz_id:
             selected_courses = [{"course_id": self.course_id, "clazz_id": self.clazz_id, "title": "指定课程"}]
@@ -156,7 +151,6 @@ class XuexitongAutoPilot:
             else:
                 selected_courses = courses
 
-        # 5. 逐门推进
         for c_idx, course in enumerate(selected_courses):
             c_name = course.get("title", f"课程_{course['course_id']}")
             print(f"\n" + "=" * 50)
