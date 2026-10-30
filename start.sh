@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# macOS / Linux 一键快捷启动脚本
-
 cd "$(dirname "$0")"
 
-# 自动探测 python3 或 python
 if command -v python3 &>/dev/null; then
     PYTHON_CMD="python3"
 elif command -v python &>/dev/null; then
@@ -13,7 +10,6 @@ else
     exit 1
 fi
 
-# 检查依赖 requests
 $PYTHON_CMD -c "import requests" &>/dev/null
 if [ $? -ne 0 ]; then
     echo "📦 [提示] 正在安装网络依赖 requests..."

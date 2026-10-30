@@ -2,6 +2,8 @@ import argparse
 import sys
 import json
 import time
+import subprocess
+import os
 from .session import XuexitongSession
 from .auth import XuexitongAuth
 from .api import XuexitongClient
@@ -19,7 +21,6 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="subcommand", help="可用子命令")
 
-    # --- 1. auth 子命令 ---
     auth_parser = subparsers.add_parser("auth", parents=[common_parser], help="身份验证与登录管理")
     auth_parser.add_argument("--status", action="store_true", help="检查当前登录状态")
     auth_parser.add_argument("--qrcode", action="store_true", help="获取终端扫码登录二维码")
@@ -27,13 +28,11 @@ def main():
     auth_parser.add_argument("--cookie", type=str, help="直接注入 Cookie 字符串登录")
     auth_parser.add_argument("--logout", action="store_true", help="退出登录并清空凭据")
 
-    # --- 2. course 子命令 ---
     course_parser = subparsers.add_parser("course", parents=[common_parser], help="课程管理与进度查询")
     course_parser.add_argument("--list", action="store_true", help="列出已加入的所有课程")
     course_parser.add_argument("--chapters", type=str, metavar="COURSE_ID", help="获取指定课程的章节结构与任务点")
     course_parser.add_argument("--clazz-id", type=str, default="", help="班级 ID (配合 --chapters)")
 
-    # --- 3. play 子命令（模拟视频心跳上报） ---
     play_parser = subparsers.add_parser("play", parents=[common_parser], help="视频任务点原速守护/心跳上报")
     play_parser.add_argument("--clazz-id", required=True, help="班级 ID")
     play_parser.add_argument("--job-id", required=True, help="任务点 Job ID")
@@ -42,12 +41,10 @@ def main():
     play_parser.add_argument("--simulate", action="store_true", help="仅单次发包测试，不进行完整物理挂机")
     play_parser.add_argument("--speed", type=float, default=1.0, help="挂机时钟步进速率 (默认 1.0 原速)")
 
-    # --- 4. quiz 子命令 ---
     quiz_parser = subparsers.add_parser("quiz", parents=[common_parser], help="章节测验与 AI 自动作答")
     quiz_parser.add_argument("--solve", type=str, metavar="JSON_FILE_OR_STR", help="输入题目 JSON 进行 AI 解答")
     quiz_parser.add_argument("--api-key", type=str, help="大模型 API Key")
 
-    # --- 5. sign 子命令（全新增补：全类型签到） ---
     sign_parser = subparsers.add_parser("sign", parents=[common_parser], help="班级签到（支持普通/手势/定位/签到码/二维码）")
     sign_parser.add_argument("--list", action="store_true", help="列出正在进行中的签到活动")
     sign_parser.add_argument("--course-id", type=str, help="课程 ID")
@@ -90,17 +87,29 @@ def main():
             qr_info = auth.get_login_qrcode()
             uuid = qr_info["uuid"]
             enc = qr_info["enc"]
+            local_qr = qr_info.get("local_qr_path")
+            html_path = qr_info.get("html_path")
             result = qr_info
+            
             if not args.json:
-                print("请在浏览器打开二维码图片扫码登录：")
-                print(qr_info["qr_img_url"])
-                print(f"UUID: {uuid}")
+                print("\n" + "=" * 50)
+                print("请使用手机学习通 App 扫码登录：")
+                print(f"📸 二维码已存至桌面: {local_qr}")
+                print("=" * 50 + "\n")
+                # 自动弹窗
+                try:
+                    if html_path and os.path.exists(html_path):
+                        subprocess.run(["open", html_path], check=False)
+                        print("💡 已自动为您打开本地二维码网页窗口！")
+                except Exception:
+                    pass
 
             if args.poll:
                 if not args.json:
                     print("等待手机端扫码中...")
                 start_t = time.time()
-                while time.time() - start_t < 120:
+                fail_times = 0
+                while time.time() - start_t < 180:
                     status_info = auth.check_qrcode_status(uuid, enc)
                     if not args.json:
                         sys.stdout.write(f"\r[{time.strftime('%H:%M:%S')}] 状态: {status_info['message']}   ")
@@ -108,13 +117,15 @@ def main():
                     if status_info["status"] == "success":
                         result = {"success": True, "message": "登录成功"}
                         if not args.json:
-                            print("\n登录成功！已保存凭据。")
+                            print("\n🎉 登录成功！已保存凭据。")
                         break
                     elif status_info["status"] == "expired":
-                        result = {"success": False, "message": "二维码已失效"}
-                        if not args.json:
-                            print("\n二维码已失效。")
-                        break
+                        fail_times += 1
+                        if fail_times >= 5:
+                            result = {"success": False, "message": "二维码已失效"}
+                            if not args.json:
+                                print("\n二维码已失效。")
+                            break
                     time.sleep(2)
         elif args.logout:
             sm.logout()
@@ -232,7 +243,6 @@ def main():
                 for s in signs:
                     print(f" - [{s['active_id']}] {s['name']} (类型: {s['other_id']}, 发起时间: {s['start_time']})")
         elif args.active_id:
-            # 执行签到
             if args.type == "general":
                 res = signer.sign_general(args.active_id)
             elif args.type == "location":

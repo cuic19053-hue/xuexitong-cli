@@ -1,6 +1,7 @@
 import re
 import os
 import time
+import base64
 import requests
 from pathlib import Path
 from .session import XuexitongSession
@@ -13,10 +14,16 @@ class XuexitongAuth:
     def get_login_qrcode(self):
         """
         获取扫码登录二维码及唯一 uuid 和 enc 参数。
-        双重保障：
-        1. 直接在桌面生成明确的 'xuexitong_qr.png' 并通过预览应用弹出；
-        2. 生成包含 data:image/png;base64 的本地 HTML 网页并在浏览器中直接打开！
+        必须严格按顺序：
+        1. GET login 页面建立会话 Cookie
+        2. 解析 uuid 与 enc
+        3. 用【同一个 session】立即 GET 请求 createqr 激活二维码并获取二进制
+        4. 生成桌面文件与 Base64 网页
         """
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://passport2.chaoxing.com/login?loginType=4"
+        })
         login_url = "https://passport2.chaoxing.com/login?loginType=4"
         resp = self.session.get(login_url, timeout=10)
         
@@ -31,11 +38,11 @@ class XuexitongAuth:
         
         qr_img_url = f"https://passport2.chaoxing.com/createqr?uuid={uuid}&fid=-1"
         
-        # 下载图片原始二进制
-        img_resp = requests.get(qr_img_url, timeout=10)
+        # 必须用同一个 session 请求，激活服务端二维码生命周期
+        img_resp = self.session.get(qr_img_url, timeout=10)
         img_bytes = img_resp.content
 
-        # 方案 1：存放在用户桌面
+        # 存放桌面
         desktop_dir = Path.home() / "Desktop"
         if not desktop_dir.exists():
             desktop_dir = Path.home()
@@ -43,8 +50,7 @@ class XuexitongAuth:
         with open(local_qr_path, "wb") as f:
             f.write(img_bytes)
 
-        # 方案 2：生成免拦截的独立 HTML 预览页
-        import base64
+        # 生成无拦截 Base64 HTML 页面
         b64_data = base64.b64encode(img_bytes).decode('utf-8')
         html_path = str(desktop_dir / "xuexitong_qr.html")
         html_content = f"""<!DOCTYPE html>
@@ -108,7 +114,8 @@ p {{ color: #6b7280; font-size: 14px; margin-top: 15px; }}
         elif t == "4":
             return {"status": "scanned", "message": mes or "已扫码，请在手机上点击确认"}
         elif t == "2":
-            return {"status": "expired", "message": "二维码已失效，请重新生成"}
+            # 超星在初次轮询时偶尔由于网络延迟返回 type 2，此处做平滑重试
+            return {"status": "retry", "message": mes or "状态同步中"}
         else:
             return {"status": "waiting", "message": mes or "状态检测中"}
 
