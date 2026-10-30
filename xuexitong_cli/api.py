@@ -75,29 +75,51 @@ class XuexitongClient:
 
     def get_chapter_card_attachments(self, course_id: str, clazz_id: str, chapter_id: str):
         """
-        深度穿透小节的多个标签页 (num=0, 1, 2...)，拉取该小节名下所有真实的挂载任务（视频、随堂测验等）
+        全量获取小节名下的真实卡片任务（自动跨越 changeCapter 真实子节点与 cards 标签页）
         """
         attachments = []
         cpi = self.sm.session.cookies.get("cpi", "485218371")
-        for num in range(5):
-            url = f"https://mooc1-2.chaoxing.com/mooc-ans/knowledge/cards?clazzid={clazz_id}&courseid={course_id}&knowledgeid={chapter_id}&num={num}&ut=s&cpi={cpi}"
-            try:
-                resp = self.session.get(url, timeout=8)
-                if not resp.ok or len(resp.text) < 100:
-                    break
-                m = re.search(r'mArg\s*=\s*(\{.*?\});', resp.text, re.S) or re.search(r'\$mArg\s*=\s*(\{.*?\});', resp.text, re.S)
-                if m:
-                    data = json.loads(m.group(1))
-                    card_atts = data.get("attachments", [])
-                    if not card_atts:
+        
+        # 1. 先探测直接的 cards num=0, 1...
+        target_knowledge_ids = [chapter_id]
+        
+        # 2. 尝试从 changeCapter 拿到真实子 knowledgeid
+        try:
+            ch_resp = self.session.post(
+                "https://mooc1-2.chaoxing.com/mooc-ans/mycourse/changeCapter",
+                data={"courseId": course_id, "clazzid": clazz_id, "chapterId": chapter_id, "type": "1"},
+                timeout=6
+            )
+            if ch_resp.ok:
+                sub_ids = re.findall(r'knowledgeid=(\d+)', ch_resp.text)
+                for sid in sub_ids:
+                    if sid not in target_knowledge_ids:
+                        target_knowledge_ids.append(sid)
+        except Exception:
+            pass
+
+        # 3. 对每个 knowledge_id 遍历 num=0, 1...
+        for kid in target_knowledge_ids:
+            for num in range(4):
+                url = f"https://mooc1-2.chaoxing.com/mooc-ans/knowledge/cards?clazzid={clazz_id}&courseid={course_id}&knowledgeid={kid}&num={num}&ut=s&cpi={cpi}"
+                try:
+                    resp = self.session.get(url, timeout=6)
+                    if not resp.ok or len(resp.text) < 100:
                         break
-                    for item in card_atts:
-                        item["_card_num"] = num
-                        attachments.append(item)
-                else:
+                    m = re.search(r'mArg\s*=\s*(\{.*?\});', resp.text, re.S) or re.search(r'\$mArg\s*=\s*(\{.*?\});', resp.text, re.S)
+                    if m:
+                        data = json.loads(m.group(1))
+                        card_atts = data.get("attachments", [])
+                        if not card_atts:
+                            break
+                        for item in card_atts:
+                            item["_card_num"] = num
+                            item["_knowledge_id"] = kid
+                            attachments.append(item)
+                    else:
+                        break
+                except Exception:
                     break
-            except Exception:
-                break
         return attachments
 
     def get_video_metadata(self, object_id: str):
