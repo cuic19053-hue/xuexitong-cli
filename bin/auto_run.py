@@ -13,6 +13,8 @@ if __name__ == "__main__":
     api_key = os.environ.get("DEEPSEEK_API_KEY")
     autopilot = XuexitongAutoPilot(api_key=api_key)
     try:
-        autopilot.run_all()
+        autopilot.run()
+    except KeyboardInterrupt:
+        print("\n\n🛑 用户手动终止执行。")
     except Exception as e:
-        print(f"❌ 运行中断: {e}")
+        print(f"\n❌ 运行异常: {e}")
